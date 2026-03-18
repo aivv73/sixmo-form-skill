@@ -70,47 +70,76 @@ function getAnswer(key, stepAnswers) {
 
 async function addStealth(context) {
   await context.addInitScript(() => {
-    Object.defineProperty(navigator, 'webdriver', { get: () => false });
-    Object.defineProperty(navigator, 'languages', { get: () => ['ru-RU', 'ru', 'en-US', 'en'] });
-    Object.defineProperty(navigator, 'platform', { get: () => 'Linux x86_64' });
-    Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+    Object.defineProperty(navigator, 'webdriver', { get: () => false, configurable: true });
+    Object.defineProperty(navigator, 'languages', { get: () => ['ru-RU', 'ru', 'en-US', 'en'], configurable: true });
+    Object.defineProperty(navigator, 'platform', { get: () => 'Linux x86_64', configurable: true });
+    Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5], configurable: true });
+    Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8, configurable: true });
+    Object.defineProperty(navigator, 'deviceMemory', { get: () => 8, configurable: true });
     window.chrome = window.chrome || { runtime: {} };
     try {
       delete window.__playwright__binding__;
       delete window.__pwInitScripts;
     } catch {}
+    const originalQuery = window.navigator.permissions?.query?.bind(window.navigator.permissions);
+    if (originalQuery) {
+      window.navigator.permissions.query = (parameters) => (
+        parameters && parameters.name === 'notifications'
+          ? Promise.resolve({ state: 'default' })
+          : originalQuery(parameters)
+      );
+    }
   });
+}
+
+async function writeDebugArtifacts(page, basePath) {
+  const resolved = path.resolve(process.cwd(), basePath);
+  fs.mkdirSync(resolved, { recursive: true });
+  const html = await page.content().catch(() => '');
+  const text = await page.locator('body').innerText().catch(() => '');
+  await page.screenshot({ path: path.join(resolved, 'failure.png'), fullPage: true }).catch(() => {});
+  fs.writeFileSync(path.join(resolved, 'failure.html'), html);
+  fs.writeFileSync(path.join(resolved, 'failure.txt'), text);
 }
 
 async function waitForStepReady(page, timeoutMs) {
-  await page.waitForFunction(() => {
-    const labels = Array.from(document.querySelectorAll('label.field-label'));
-    const controls = Array.from(document.querySelectorAll('input, select, textarea'));
-    const actionButtons = Array.from(document.querySelectorAll('button')).filter((btn) =>
-      /Продолжить|Зафиксировать идентификатор/i.test(btn.innerText || '')
-    );
-    return labels.length > 0 && controls.length > 0 && actionButtons.length > 0;
-  }, { timeout: timeoutMs });
+  try {
+    await page.waitForFunction(() => {
+      const bodyText = document.body?.innerText || '';
+      const labels = Array.from(document.querySelectorAll('label.field-label'));
+      const controls = Array.from(document.querySelectorAll('input, select, textarea'));
+      const actionButtons = Array.from(document.querySelectorAll('button')).filter((btn) =>
+        /Продолжить|Зафиксировать идентификатор/i.test(btn.innerText || '')
+      );
+      const hardError = /Браузерная среда не прошла проверку совместимости|Сеанс формы недействителен|Этот этап сейчас недоступен/i.test(bodyText);
+      return hardError || (labels.length > 0 && controls.length > 0 && actionButtons.length > 0);
+    }, { timeout: timeoutMs });
+  } catch {
+    const bodyText = await page.locator('body').innerText().catch(() => '');
+    throw new Error(`waitForStepReady timeout. URL=${page.url()} BODY=${normalizeText(bodyText).slice(0, 1500)}`);
+  }
+
+  const bodyText = await page.locator('body').innerText().catch(() => '');
+  if (/Браузерная среда не прошла проверку совместимости|Сеанс формы недействителен|Этот этап сейчас недоступен/i.test(bodyText)) {
+    throw new Error(`Page reported blocking/error state: ${normalizeText(bodyText).slice(0, 1500)}`);
+  }
 }
 
 async function collectFields(page) {
-  return page.locator('label.field-label').evaluateAll((labels) => {
-    return labels.map((label) => {
-      const htmlFor = label.getAttribute('for');
-      const input = htmlFor ? document.getElementById(htmlFor) : null;
-      return {
-        label: (label.textContent || '').replace(/\s+/g, ' ').trim(),
-        htmlFor,
-        tagName: input?.tagName || null,
-        type: input?.getAttribute('type') || (input?.tagName === 'SELECT' ? 'select' : null),
-        accept: input?.getAttribute('accept') || null,
-      };
-    });
-  });
+  return page.locator('label.field-label').evaluateAll((labels) => labels.map((label) => {
+    const htmlFor = label.getAttribute('for');
+    const input = htmlFor ? document.getElementById(htmlFor) : null;
+    return {
+      label: (label.textContent || '').replace(/\s+/g, ' ').trim(),
+      htmlFor,
+      tagName: input?.tagName || null,
+      type: input?.getAttribute('type') || (input?.tagName === 'SELECT' ? 'select' : null),
+      accept: input?.getAttribute('accept') || null,
+    };
+  }));
 }
 
 async function fillField(page, field, answer, input) {
-  const labelLocator = page.getByText(field.label, { exact: true }).locator('..');
   if (field.type === 'file') {
     if (!input.filePath) throw new Error(`Field "${field.label}" requires filePath.`);
     await page.locator(`#${field.htmlFor}`).setInputFiles(path.resolve(process.cwd(), input.filePath));
@@ -156,7 +185,13 @@ async function run(rawInput) {
     headless: input.headless,
     slowMo: input.slowMo,
     executablePath: input.executablePath,
-    args: ['--disable-blink-features=AutomationControlled'],
+    channel: input.executablePath ? undefined : 'chromium',
+    args: [
+      '--disable-blink-features=AutomationControlled',
+      '--disable-dev-shm-usage',
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+    ],
   });
 
   const context = await browser.newContext({
@@ -171,10 +206,18 @@ async function run(rawInput) {
 
   const page = await context.newPage();
   page.setDefaultTimeout(input.timeoutMs);
+  const debugDir = 'artifacts';
+  const networkLog = [];
+  page.on('response', (response) => {
+    if (response.url().includes('sixmo.ru')) {
+      networkLog.push({ url: response.url(), status: response.status() });
+    }
+  });
 
   try {
     await page.goto(input.baseUrl, { waitUntil: 'domcontentloaded' });
     await page.getByRole('button', { name: /Начать задание/i }).click();
+    await page.waitForURL(/\/flow\/.*\/step\/1/, { timeout: input.timeoutMs });
 
     const step1 = await fillCurrentStep(page, 1, input);
     await page.waitForURL(/\/flow\/.*\/step\/2/, { timeout: input.timeoutMs });
@@ -193,7 +236,7 @@ async function run(rawInput) {
       await page.screenshot({ path: path.resolve(process.cwd(), input.screenshotPath), fullPage: true });
     }
 
-    const result = {
+    return {
       ok: true,
       baseUrl: input.baseUrl,
       currentUrl: page.url(),
@@ -204,8 +247,11 @@ async function run(rawInput) {
         bodyText,
       },
     };
-
-    return result;
+  } catch (error) {
+    await writeDebugArtifacts(page, debugDir).catch(() => {});
+    fs.mkdirSync(path.resolve(process.cwd(), debugDir), { recursive: true });
+    fs.writeFileSync(path.join(path.resolve(process.cwd(), debugDir), 'network.json'), JSON.stringify(networkLog, null, 2));
+    throw error;
   } finally {
     if (input.tracePath) {
       await context.tracing.stop({ path: path.resolve(process.cwd(), input.tracePath) });
