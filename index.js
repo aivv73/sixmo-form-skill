@@ -220,11 +220,17 @@ async function run(rawInput) {
     await page.waitForURL(/\/flow\/.*\/step\/1/, { timeout: input.timeoutMs });
 
     const step1 = await fillCurrentStep(page, 1, input);
-    await page.waitForURL(/\/flow\/.*\/step\/2/, { timeout: input.timeoutMs });
+    await Promise.race([
+      page.waitForURL(/\/flow\/.*\/step\/2/, { timeout: input.timeoutMs }),
+      page.waitForFunction(() => /Заключительный этап|Загрузите небольшой текстовый файл/i.test(document.body?.innerText || ''), { timeout: input.timeoutMs }),
+    ]);
 
     const step2 = await fillCurrentStep(page, 2, input);
-    await page.waitForURL(/\/flow\/.*\/result/, { timeout: input.timeoutMs });
-    await page.waitForLoadState('networkidle');
+    await Promise.race([
+      page.waitForURL(/\/flow\/.*\/result/, { timeout: input.timeoutMs }),
+      page.waitForFunction(() => /finalIdentifier|UTC|идентификатор/i.test(document.body?.innerText || ''), { timeout: input.timeoutMs }),
+    ]);
+    await page.waitForLoadState('networkidle').catch(() => {});
 
     const bodyText = normalizeText(await page.locator('body').innerText());
     const finalIdentifierMatch = bodyText.match(/[A-Z0-9]{12}/);
