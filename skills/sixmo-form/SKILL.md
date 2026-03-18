@@ -1,24 +1,22 @@
 ---
 name: sixmo-form
-summary: Submit the Sixmo adaptive challenge form from structured input.
+summary: Complete the Sixmo adaptive web form through the browser UI with Playwright.
 ---
 
 # Sixmo Form Skill
 
-Use this skill when you need to complete the test form on https://sixmo.ru/ automatically and optionally upload a file on step 2.
+Use this skill when you need to complete the test form on https://sixmo.ru/ automatically through the actual browser interface.
 
 ## Input
 
-Provide a JSON payload with:
+Provide JSON with:
 
-- `stepAnswers.1` — answers for step 1 by field name
-- `stepAnswers.2` — answers for step 2 by field name
-- `filePath` — local file path for the upload field on step 2
-- optional `fileName`, `fileMimeType`, `dryRun`
+- `stepAnswers.1` — answers for step 1
+- `stepAnswers.2` — answers for step 2
+- `filePath` — local file path for upload on step 2
+- optional `headless`, `tracePath`, `finalScreenshotPath`, `timeoutMs`
 
 ## Run
-
-From the project root:
 
 ```bash
 node index.js payload.json
@@ -32,6 +30,6 @@ cat payload.json | node index.js -
 
 ## Notes
 
-- The form order is unstable, so always match answers by `field.name`, not by visual order.
-- This implementation uses the site API after creating a valid session and cookie pair.
-- `dryRun: true` only discovers steps and fields, without submitting the form.
+- This implementation is Playwright-first and interacts with the UI, not direct private API calls.
+- It matches fields by visible question labels, so random field order does not break the scenario.
+- It supports text fields, selects, and file upload.

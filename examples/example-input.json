@@ -2,15 +2,16 @@
   "stepAnswers": {
     "1": {
       "logic_mode": "Букля",
-      "orbital_path": "arc-lumen",
+      "orbital_path": "Хогвартс",
       "favorite_color": "Гриффиндор"
     },
     "2": {
       "shape_signal": "Платформа 9 3/4",
-      "tempo_choice": "glide"
+      "tempo_choice": "Снитч"
     }
   },
   "filePath": "examples/upload.txt",
-  "fileName": "upload.txt",
-  "fileMimeType": "text/plain"
+  "headless": true,
+  "tracePath": "artifacts/trace.zip",
+  "finalScreenshotPath": "artifacts/result.png"
 }

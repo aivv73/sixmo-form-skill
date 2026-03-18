@@ -1,38 +1,18 @@
 #!/usr/bin/env node
 const fs = require('fs');
 const path = require('path');
+const { chromium } = require('playwright');
 const { z } = require('zod');
 
-const DEFAULT_USER_AGENT =
-  'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36';
-
-const DEFAULT_FINGERPRINT = {
-  visitorId: '1234567890abcdef1234567890abcdef',
-  confidence: 0.99,
-  userAgent: DEFAULT_USER_AGENT,
-  webdriver: false,
-  languages: ['ru-RU', 'ru', 'en-US', 'en'],
-  platform: 'Linux x86_64',
-  pluginsLength: 5,
-  hardwareConcurrency: 8,
-  deviceMemory: 8,
-  screen: { width: 1920, height: 1080, colorDepth: 24 },
-  timezone: 'Europe/Ulyanovsk',
-  touchPoints: 0,
-  hasPlaywrightBinding: false,
-  hasChromeRuntime: false,
-  hasChromeObject: true,
-  vendor: 'Google Inc.',
-  notificationPermission: 'default',
-  webgl: { vendor: 'Google Inc. (Google)', renderer: 'ANGLE (Google, Vulkan 1.3.0)' },
-  screenConsistency: { innerWidth: 1280, innerHeight: 720, outerWidth: 1280, outerHeight: 800 },
-  colorDepth: 24,
-  fpComponents: ['fonts', 'audio', 'screenFrame'],
-};
-
 const InputSchema = z.object({
-  baseUrl: z.string().url().default('https://sixmo.ru'),
-  fingerprint: z.record(z.string(), z.any()).default({}),
+  baseUrl: z.string().url().default('https://sixmo.ru/'),
+  headless: z.boolean().default(true),
+  slowMo: z.number().int().nonnegative().default(0),
+  timeoutMs: z.number().int().positive().default(45000),
+  executablePath: z.string().optional(),
+  tracePath: z.string().optional(),
+  screenshotPath: z.string().optional(),
+  finalScreenshotPath: z.string().optional(),
   stepAnswers: z.object({
     1: z.record(z.string(), z.string()).default({}),
     2: z.record(z.string(), z.string()).default({}),
@@ -40,22 +20,24 @@ const InputSchema = z.object({
   filePath: z.string().optional(),
   fileName: z.string().optional(),
   fileMimeType: z.string().default('text/plain'),
-  telemetry: z.record(z.string(), z.any()).default({ source: 'openclaw-skill', mode: 'api-automation' }),
-  dryRun: z.boolean().default(false),
 });
 
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
+const QUESTION_MAP = [
+  { key: 'logic_mode', match: [/Как звали сову Гарри Поттера/i] },
+  { key: 'orbital_path', match: [/Как называется школа, в которой учились Гарри, Рон и Гермиона/i] },
+  { key: 'favorite_color', match: [/На какой факультет распределили Гарри Поттера/i] },
+  { key: 'shape_signal', match: [/Как называется платформа, с которой отправляется поезд в Хогвартс/i] },
+  { key: 'tempo_choice', match: [/Какой из этих предметов связан с квиддичем/i] },
+  { key: 'artifact_file', match: [/Загрузите небольшой текстовый файл/i] },
+];
 
-function mergeHeaders(cookie, headers = {}) {
-  return {
-    Origin: 'https://sixmo.ru',
-    Referer: 'https://sixmo.ru/',
-    ...(cookie ? { Cookie: cookie } : {}),
-    ...headers,
-  };
-}
+const DEFAULT_ANSWERS = {
+  logic_mode: 'Букля',
+  orbital_path: 'Хогвартс',
+  favorite_color: 'Гриффиндор',
+  shape_signal: 'Платформа 9 3/4',
+  tempo_choice: 'Снитч',
+};
 
 async function readJsonInput() {
   const arg = process.argv[2];
@@ -69,170 +51,166 @@ async function readJsonInput() {
     });
     return stdin.trim() ? JSON.parse(stdin) : {};
   }
-  const fullPath = path.resolve(process.cwd(), arg);
-  return JSON.parse(fs.readFileSync(fullPath, 'utf8'));
+  return JSON.parse(fs.readFileSync(path.resolve(process.cwd(), arg), 'utf8'));
 }
 
-function selectAnswer(field, stepAnswers) {
-  const explicit = stepAnswers[field.name];
-  if (explicit) return explicit;
-  if (field.type === 'select') return field.options?.[0]?.value ?? '';
-  return field.placeholder || field.label || 'test';
+function normalizeText(text) {
+  return String(text || '').replace(/\s+/g, ' ').trim();
 }
 
-async function startFlow(baseUrl, fingerprint) {
-  const response = await fetch(`${baseUrl}/api/start.php`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'User-Agent': fingerprint.userAgent,
-      ...mergeHeaders(null),
-    },
-    body: JSON.stringify({ fingerprint }),
+function getLogicalKey(labelText) {
+  const text = normalizeText(labelText);
+  const entry = QUESTION_MAP.find((item) => item.match.some((re) => re.test(text)));
+  return entry ? entry.key : null;
+}
+
+function getAnswer(key, stepAnswers) {
+  return stepAnswers[key] ?? DEFAULT_ANSWERS[key] ?? '';
+}
+
+async function addStealth(context) {
+  await context.addInitScript(() => {
+    Object.defineProperty(navigator, 'webdriver', { get: () => false });
+    Object.defineProperty(navigator, 'languages', { get: () => ['ru-RU', 'ru', 'en-US', 'en'] });
+    Object.defineProperty(navigator, 'platform', { get: () => 'Linux x86_64' });
+    Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+    window.chrome = window.chrome || { runtime: {} };
+    try {
+      delete window.__playwright__binding__;
+      delete window.__pwInitScripts;
+    } catch {}
   });
-
-  const body = await response.json();
-  if (!response.ok || body.ok === false) {
-    throw new Error(body.error || `start.php failed with ${response.status}`);
-  }
-
-  const setCookie = response.headers.get('set-cookie');
-  const cookie = setCookie ? setCookie.split(';')[0] : null;
-  if (!cookie) {
-    throw new Error('No session cookie returned by start.php');
-  }
-
-  return { ...body, cookie };
 }
 
-async function apiJson(baseUrl, pathname, { cookie, headers, method = 'GET', body } = {}) {
-  const response = await fetch(`${baseUrl}${pathname}`, {
-    method,
-    headers: mergeHeaders(cookie, headers),
-    body,
-  });
-  const payload = await response.json();
-  if (!response.ok || payload.ok === false) {
-    throw new Error(payload.error || `Request failed: ${response.status}`);
-  }
-  return payload;
+async function waitForStepReady(page, timeoutMs) {
+  await page.waitForFunction(() => {
+    const text = document.body?.innerText || '';
+    const hasLoader = /Подготовка этапа|Собираю интерфейс|Проверяю этап|Ждем, пока откроется следующий шаг/i.test(text);
+    const hasAction = Array.from(document.querySelectorAll('button')).some((btn) => /Продолжить|Зафиксировать идентификатор/i.test(btn.innerText || ''));
+    return hasAction && !hasLoader;
+  }, { timeout: timeoutMs });
 }
 
-async function getStep(baseUrl, session, step) {
-  while (true) {
-    const payload = await apiJson(baseUrl, `/api/step.php?flow_id=${encodeURIComponent(session.flowId)}&step=${step}`, {
-      cookie: session.cookie,
-      headers: {
-        'X-Flow-Key': session.flowKey,
-        'X-CSRF-Token': session.csrfToken,
-      },
+async function collectFields(page) {
+  return page.locator('label.field-label').evaluateAll((labels) => {
+    return labels.map((label) => {
+      const htmlFor = label.getAttribute('for');
+      const input = htmlFor ? document.getElementById(htmlFor) : null;
+      return {
+        label: (label.textContent || '').replace(/\s+/g, ' ').trim(),
+        htmlFor,
+        tagName: input?.tagName || null,
+        type: input?.getAttribute('type') || (input?.tagName === 'SELECT' ? 'select' : null),
+        accept: input?.getAttribute('accept') || null,
+      };
     });
-
-    if (payload.status === 'pending') {
-      await sleep(Math.max(350, payload.retryAfterMs || 500));
-      continue;
-    }
-
-    return payload.stepData;
-  }
-}
-
-async function submitStep(baseUrl, session, stepData, answers, options) {
-  const form = new FormData();
-  form.append('flow_id', session.flowId);
-  form.append('step', String(stepData.step));
-  form.append('step_token', stepData.stepToken);
-  form.append(
-    'telemetry',
-    JSON.stringify({
-      ...options.telemetry,
-      step: stepData.step,
-      fieldOrder: stepData.fields.map((field) => field.name),
-      submittedAt: new Date().toISOString(),
-    })
-  );
-
-  for (const field of stepData.fields) {
-    if (field.type === 'file') {
-      if (!options.filePath && !options.dryRun) {
-        throw new Error(`Step ${stepData.step} requires a file for field ${field.name}, but filePath was not provided.`);
-      }
-      if (options.filePath) {
-        const fileBuffer = fs.readFileSync(path.resolve(process.cwd(), options.filePath));
-        const fileName = options.fileName || path.basename(options.filePath);
-        form.append(field.name, new Blob([fileBuffer], { type: options.fileMimeType }), fileName);
-      } else {
-        form.append(field.name, new Blob(['dry-run'], { type: 'text/plain' }), 'dry-run.txt');
-      }
-      continue;
-    }
-
-    form.append(field.name, selectAnswer(field, answers));
-  }
-
-  return apiJson(baseUrl, '/api/submit.php', {
-    method: 'POST',
-    cookie: session.cookie,
-    headers: {
-      'X-Flow-Key': session.flowKey,
-      'X-CSRF-Token': session.csrfToken,
-    },
-    body: form,
   });
 }
 
-async function fetchResult(baseUrl, session) {
-  return apiJson(baseUrl, `/api/result.php?flow_id=${encodeURIComponent(session.flowId)}`, {
-    cookie: session.cookie,
-    headers: {
-      'X-Flow-Key': session.flowKey,
-      'X-CSRF-Token': session.csrfToken,
-    },
-  });
+async function fillField(page, field, answer, input) {
+  const labelLocator = page.getByText(field.label, { exact: true }).locator('..');
+  if (field.type === 'file') {
+    if (!input.filePath) throw new Error(`Field "${field.label}" requires filePath.`);
+    await page.locator(`#${field.htmlFor}`).setInputFiles(path.resolve(process.cwd(), input.filePath));
+    return { key: getLogicalKey(field.label), label: field.label, type: field.type, value: path.basename(input.filePath) };
+  }
+
+  if (field.type === 'select') {
+    const select = page.locator(`#${field.htmlFor}`);
+    try {
+      await select.selectOption({ label: answer });
+    } catch {
+      await select.selectOption({ value: answer });
+    }
+    return { key: getLogicalKey(field.label), label: field.label, type: field.type, value: answer };
+  }
+
+  const control = page.locator(`#${field.htmlFor}`);
+  await control.fill('');
+  await control.fill(answer);
+  return { key: getLogicalKey(field.label), label: field.label, type: field.type, value: answer };
+}
+
+async function fillCurrentStep(page, stepNumber, input) {
+  await waitForStepReady(page, input.timeoutMs);
+  const fields = await collectFields(page);
+  const filled = [];
+  const answers = input.stepAnswers[String(stepNumber)] || {};
+
+  for (const field of fields) {
+    const key = getLogicalKey(field.label);
+    const answer = getAnswer(key, answers);
+    filled.push(await fillField(page, field, answer, input));
+  }
+
+  const buttonName = stepNumber === 2 ? /Зафиксировать идентификатор/i : /Продолжить/i;
+  await page.getByRole('button', { name: buttonName }).click();
+  return { step: stepNumber, fields, filled };
 }
 
 async function run(rawInput) {
   const input = InputSchema.parse(rawInput);
-  input.fingerprint = {
-    ...DEFAULT_FINGERPRINT,
-    ...input.fingerprint,
-    screen: { ...DEFAULT_FINGERPRINT.screen, ...(input.fingerprint.screen || {}) },
-    webgl: { ...DEFAULT_FINGERPRINT.webgl, ...(input.fingerprint.webgl || {}) },
-    screenConsistency: {
-      ...DEFAULT_FINGERPRINT.screenConsistency,
-      ...(input.fingerprint.screenConsistency || {}),
-    },
-  };
-  const session = await startFlow(input.baseUrl, input.fingerprint);
-  const steps = [];
+  const browser = await chromium.launch({
+    headless: input.headless,
+    slowMo: input.slowMo,
+    executablePath: input.executablePath,
+    args: ['--disable-blink-features=AutomationControlled'],
+  });
 
-  for (const stepNumber of [1, 2]) {
-    const stepData = await getStep(input.baseUrl, session, stepNumber);
-    steps.push({
-      step: stepNumber,
-      title: stepData.title,
-      fieldNames: stepData.fields.map((field) => field.name),
-      fieldTypes: stepData.fields.map((field) => ({ name: field.name, type: field.type })),
-    });
+  const context = await browser.newContext({
+    viewport: { width: 1440, height: 960 },
+    locale: 'ru-RU',
+    timezoneId: 'Europe/Ulyanovsk',
+    userAgent: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36',
+  });
 
-    await submitStep(
-      input.baseUrl,
-      session,
-      stepData,
-      input.stepAnswers[String(stepNumber)] || {},
-      input
-    );
+  await addStealth(context);
+  if (input.tracePath) await context.tracing.start({ screenshots: true, snapshots: true });
+
+  const page = await context.newPage();
+  page.setDefaultTimeout(input.timeoutMs);
+
+  try {
+    await page.goto(input.baseUrl, { waitUntil: 'domcontentloaded' });
+    await page.getByRole('button', { name: /Начать задание/i }).click();
+
+    const step1 = await fillCurrentStep(page, 1, input);
+    await page.waitForURL(/\/flow\/.*\/step\/2/, { timeout: input.timeoutMs });
+
+    const step2 = await fillCurrentStep(page, 2, input);
+    await page.waitForURL(/\/flow\/.*\/result/, { timeout: input.timeoutMs });
+    await page.waitForLoadState('networkidle');
+
+    const bodyText = normalizeText(await page.locator('body').innerText());
+    const finalIdentifierMatch = bodyText.match(/[A-Z0-9]{12}/);
+    const completedAtMatch = bodyText.match(/\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} UTC/);
+
+    if (input.finalScreenshotPath) {
+      await page.screenshot({ path: path.resolve(process.cwd(), input.finalScreenshotPath), fullPage: true });
+    } else if (input.screenshotPath) {
+      await page.screenshot({ path: path.resolve(process.cwd(), input.screenshotPath), fullPage: true });
+    }
+
+    const result = {
+      ok: true,
+      baseUrl: input.baseUrl,
+      currentUrl: page.url(),
+      steps: [step1, step2],
+      result: {
+        finalIdentifier: finalIdentifierMatch ? finalIdentifierMatch[0] : null,
+        completedAt: completedAtMatch ? completedAtMatch[0] : null,
+        bodyText,
+      },
+    };
+
+    return result;
+  } finally {
+    if (input.tracePath) {
+      await context.tracing.stop({ path: path.resolve(process.cwd(), input.tracePath) });
+    }
+    await context.close();
+    await browser.close();
   }
-
-  const result = input.dryRun ? null : await fetchResult(input.baseUrl, session);
-
-  return {
-    ok: true,
-    baseUrl: input.baseUrl,
-    flowId: session.flowId,
-    steps,
-    result,
-  };
 }
 
 (async () => {
