@@ -1,0 +1,26 @@
+{
+  "name": "sixmo-form-skill",
+  "version": "1.0.0",
+  "description": "Automation for the Sixmo adaptive test form",
+  "main": "index.js",
+  "bin": {
+    "sixmo-form-submit": "index.js"
+  },
+  "scripts": {
+    "dry-run": "node index.js examples/dry-run-input.json",
+    "run-example": "node index.js examples/example-input.json"
+  },
+  "keywords": [
+    "automation",
+    "sixmo",
+    "openclaw",
+    "skill"
+  ],
+  "author": "",
+  "license": "MIT",
+  "type": "commonjs",
+  "dependencies": {
+    "playwright": "^1.58.2",
+    "zod": "^4.3.6"
+  }
+}
