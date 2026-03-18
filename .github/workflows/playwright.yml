@@ -20,7 +20,7 @@ jobs:
       - run: npm ci
       - run: npx playwright install --with-deps chromium
       - run: mkdir -p artifacts
-      - run: node index.js examples/example-input.json
+      - run: xvfb-run -a node index.js examples/ci-input.json
       - uses: actions/upload-artifact@v4
         if: always()
         with:

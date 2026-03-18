@@ -84,10 +84,12 @@ async function addStealth(context) {
 
 async function waitForStepReady(page, timeoutMs) {
   await page.waitForFunction(() => {
-    const text = document.body?.innerText || '';
-    const hasLoader = /Подготовка этапа|Собираю интерфейс|Проверяю этап|Ждем, пока откроется следующий шаг/i.test(text);
-    const hasAction = Array.from(document.querySelectorAll('button')).some((btn) => /Продолжить|Зафиксировать идентификатор/i.test(btn.innerText || ''));
-    return hasAction && !hasLoader;
+    const labels = Array.from(document.querySelectorAll('label.field-label'));
+    const controls = Array.from(document.querySelectorAll('input, select, textarea'));
+    const actionButtons = Array.from(document.querySelectorAll('button')).filter((btn) =>
+      /Продолжить|Зафиксировать идентификатор/i.test(btn.innerText || '')
+    );
+    return labels.length > 0 && controls.length > 0 && actionButtons.length > 0;
   }, { timeout: timeoutMs });
 }
 
