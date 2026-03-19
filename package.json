@@ -1,7 +1,7 @@
 {
   "name": "sixmo-form-skill",
   "version": "1.0.0",
-  "description": "Playwright-first automation for the Sixmo adaptive form",
+  "description": "Browser UI automation for the Sixmo adaptive form via chrome-devtools-mcp",
   "main": "scripts/run-sixmo-form.js",
   "bin": {
     "sixmo-form-submit": "scripts/run-sixmo-form.js"
@@ -21,8 +21,5 @@
   "type": "commonjs",
   "dependencies": {
     "zod": "^4.3.6"
-  }
-}
-6"
   }
 }

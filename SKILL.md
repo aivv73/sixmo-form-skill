@@ -17,19 +17,27 @@ Use this skill to complete the form on `https://sixmo.ru/` through the real brow
 
 ## Default workflow
 
-1. Run the CLI from the skill root:
+1. Prefer the built-in browser tools immediately:
+   - open `https://sixmo.ru/`;
+   - click `Начать задание`;
+   - wait for each delayed step to load;
+   - match fields by visible question text, not DOM position;
+   - fill step 1 with `Гриффиндор`, `Хогвартс`, `Букля`;
+   - fill step 2 with `Платформа 9 3/4`, `Снитч`, and upload `assets/examples/upload.txt`;
+   - submit and capture the generated identifier from the result page.
+2. Use `scripts/run-sixmo-form.js` only as a fallback when direct browser tools are unavailable:
    ```bash
    node scripts/run-sixmo-form.js assets/examples/example-input.json
    ```
-2. If stdin is preferred:
+3. If stdin is preferred for the fallback runner:
    ```bash
    cat payload.json | node scripts/run-sixmo-form.js -
    ```
-3. Read `references/usage.md` when you need troubleshooting or environment notes.
+4. Read `references/usage.md` when you need troubleshooting or environment notes.
 
 ## Notes
 
 - Match fields by visible question text, not DOM position.
 - Handle text fields, select/combobox fields, and file upload separately.
-- Prefer the default example input before adding custom MCP overrides.
-- If the environment already exposes browser tools directly, those may be more reliable than starting a nested browser MCP from inside another coding agent runtime.
+- Prefer direct browser-tool execution over starting a nested MCP/browser process.
+- Use the default example input only for the fallback runner before adding custom MCP overrides.
