@@ -5,6 +5,12 @@
 - Сценарий учитывает delayed steps, случайный порядок полей и загрузку файла.
 - CLI-раннер оставлен только как fallback, если прямые browser tools недоступны.
 
+Для запуска через Codex:
+- открой `chrome://inspect/#remote-debugging`;
+- включи галочку для remote debugging / discover targets;
+- запусти skill через Codex;
+- согласись на запрос браузера о remote debugging, если Chrome/Chromium его покажет.
+
 Проект перестроен под skill-layout:
 
 ```text
