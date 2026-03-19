@@ -1,5 +1,10 @@
 # Sixmo Form Skill
 
+- Это tool/skill для автопрохождения формы на `https://sixmo.ru/`.
+- Основной путь выполнения — через реальный Chrome/Chromium и Developer MCP / browser tools.
+- Сценарий учитывает delayed steps, случайный порядок полей и загрузку файла.
+- CLI-раннер оставлен только как fallback, если прямые browser tools недоступны.
+
 Проект перестроен под skill-layout:
 
 ```text
