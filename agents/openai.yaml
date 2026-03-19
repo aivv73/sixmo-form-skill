@@ -1,0 +1,10 @@
+name: sixmo-form
+entrypoint: scripts/run-sixmo-form.js
+instructions: SKILL.md
+references:
+  - references/usage.md
+assets:
+  - assets/examples/example-input.json
+  - assets/examples/mcp-stable-input.json
+  - assets/examples/executable-path-input.json
+  - assets/examples/upload.txt

@@ -11,7 +11,9 @@
     }
   },
   "filePath": "examples/upload.txt",
-  "headless": true,
-  "tracePath": "artifacts/trace.zip",
-  "finalScreenshotPath": "artifacts/result.png"
+  "timeoutMs": 60000,
+  "mcp": {
+    "autoConnect": false,
+    "browserUrl": "http://localhost:9222"
+  }
 }

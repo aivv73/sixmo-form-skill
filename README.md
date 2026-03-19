@@ -1,95 +1,46 @@
 # Sixmo Form Skill
 
-Устойчивая browser-automation обёртка для тестовой формы на <https://sixmo.ru/> в виде CLI.
+Проект перестроен под skill-layout:
 
-## Что делает
+```text
+sixmo-form-skill/
+├── SKILL.md
+├── scripts/
+│   └── run-sixmo-form.js
+├── references/
+│   └── usage.md
+├── assets/
+│   └── examples/
+│       ├── example-input.json
+│       ├── mcp-stable-input.json
+│       ├── executable-path-input.json
+│       └── upload.txt
+├── agents/
+│   └── openai.yaml
+├── package.json
+└── package-lock.json
+```
 
-- открывает реальную страницу в Chromium через `chrome-devtools-mcp`;
-- нажимает старт через UI;
-- ждёт появления шагов, даже если они открываются с задержкой;
-- ищет поля по тексту вопроса, а не по позиции в DOM;
-- переживает случайный порядок полей и плавающую структуру разметки;
-- отдельно обрабатывает textbox, select/combobox и upload;
-- возвращает итоговый идентификатор и время завершения.
+## Основной запуск
 
-## Почему это соответствует ТЗ
-
-Это именно **browser automation**, а не прямые вызовы внутренних API.
-Сценарий проходит форму через пользовательский интерфейс в настоящем браузере.
-
-## Важная деталь реализации
-
-Для устойчивого старта по умолчанию используется:
-
-- `chrome-devtools-mcp --autoConnect`
-- канал браузера `stable`
-
-Для `combobox` используется не обычный клик по option, а установка выбранного значения через DOM + события `input/change`, потому что на этой форме обычный click через MCP не всегда фиксировал выбор.
-
-## Установка
+Из корня проекта:
 
 ```bash
-npm install
+node scripts/run-sixmo-form.js assets/examples/example-input.json
 ```
 
-## Запуск
+или:
 
 ```bash
-node index.js examples/example-input.json
+cat payload.json | node scripts/run-sixmo-form.js -
 ```
 
-или через stdin:
+## Где что лежит
 
-```bash
-cat payload.json | node index.js -
-```
+- `SKILL.md` — metadata + инструкции skill
+- `scripts/` — исполняемый код
+- `references/` — документация и troubleshooting
+- `assets/` — примеры payload и файл для upload
+- `agents/openai.yaml` — metadata для agent-oriented layout
 
-## Формат входа
-
-```json
-{
-  "stepAnswers": {
-    "1": {
-      "logic_mode": "Букля",
-      "orbital_path": "Хогвартс",
-      "favorite_color": "Гриффиндор"
-    },
-    "2": {
-      "shape_signal": "Платформа 9 3/4",
-      "tempo_choice": "Снитч"
-    }
-  },
-  "filePath": "examples/upload.txt",
-  "timeoutMs": 60000,
-  "mcp": {
-    "channel": "stable"
-  }
-}
-```
-
-## Пример результата
-
-```json
-{
-  "ok": true,
-  "currentUrl": "https://sixmo.ru/#/flow/.../result",
-  "steps": [
-    { "step": 1, "filled": ["..."] },
-    { "step": 2, "filled": ["..."] }
-  ],
-  "result": {
-    "finalIdentifier": "D452AB884846",
-    "completedAt": "2026-03-19 13:35:04 UTC"
-  }
-}
-```
-
-## Как работает устойчивость
-
-Форма специально сделана хрупкой для наивной автоматизации, поэтому сценарий:
-
-- не использует фиксированные CSS-классы;
-- не опирается на порядок элементов;
-- ждёт тексты шагов вместо жёстких таймингов;
-- нормализует входные alias-ключи в реальные тексты вопросов;
-- по-разному обрабатывает text/select/file-поля.
+Подробности по запуску и проблемам среды: `references/usage.md`.

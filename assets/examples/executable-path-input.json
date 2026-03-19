@@ -10,9 +10,9 @@
       "tempo_choice": "Снитч"
     }
   },
-  "filePath": "examples/upload.txt",
+  "filePath": "assets/examples/upload.txt",
   "timeoutMs": 60000,
   "mcp": {
-    "channel": "stable"
+    "executablePath": "/path/to/chromium-or-chrome"
   }
 }

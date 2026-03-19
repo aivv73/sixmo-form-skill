@@ -1,5 +1,10 @@
 #!/usr/bin/env node
+
+// Run from the skill root, e.g.:
+// node scripts/run-sixmo-form.js assets/examples/example-input.json
+
 const fs = require('fs');
+const http = require('http');
 const path = require('path');
 const { pathToFileURL } = require('url');
 const { z } = require('zod');
@@ -7,6 +12,7 @@ const { z } = require('zod');
 const DEFAULT_BASE_URL = 'https://sixmo.ru/';
 const DEFAULT_TIMEOUT_MS = 45000;
 const DEFAULT_CONNECT_TIMEOUT_MS = 20000;
+const DEFAULT_BROWSER_URL = 'http://127.0.0.1:9222';
 const DEFAULT_STEP_ANSWERS = {
   1: {
     'Как называется школа, в которой учились Гарри, Рон и Гермиона?': 'Хогвартс',
@@ -71,6 +77,29 @@ function normalizeStepAnswers(stepAnswers) {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function canConnectToBrowserUrl(browserUrl, timeoutMs) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = (value) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+
+    const req = http.get(new URL('/json/version', browserUrl), (res) => {
+      done(res.statusCode >= 200 && res.statusCode < 300);
+      res.resume();
+    });
+
+    req.setTimeout(timeoutMs, () => {
+      req.destroy();
+      done(false);
+    });
+
+    req.on('error', () => done(false));
+  });
 }
 
 async function readJsonInput() {
@@ -190,9 +219,9 @@ async function ensureSixmoPage(client, baseUrl, timeoutMs) {
     || null
   );
 
-  const pagesResult = await client.callTool('list_pages', {});
-  const pages = pagesResult.structuredContent?.pages || [];
-  const existing = findMatchingPage(pages);
+  let pagesResult = await client.callTool('list_pages', {});
+  let pages = pagesResult.structuredContent?.pages || [];
+  let existing = findMatchingPage(pages);
   if (existing) {
     await client.callTool('select_page', { pageId: existing.id, bringToFront: true });
     await client.callTool('navigate_page', { type: 'url', url: baseUrl, timeout: timeoutMs });
@@ -200,12 +229,23 @@ async function ensureSixmoPage(client, baseUrl, timeoutMs) {
   }
 
   await client.callTool('new_page', { url: baseUrl, timeout: timeoutMs });
-  const refreshedPagesResult = await client.callTool('list_pages', {});
-  const refreshedPages = refreshedPagesResult.structuredContent?.pages || [];
-  const created = findMatchingPage(refreshedPages);
-  if (!created) throw new Error(`Failed to open ${baseUrl}; pages: ${JSON.stringify(refreshedPages)}`);
-  await client.callTool('select_page', { pageId: created.id, bringToFront: true });
-  return created.id;
+
+  const deadline = Date.now() + Math.min(timeoutMs, 15000);
+  while (Date.now() < deadline) {
+    await sleep(500);
+    pagesResult = await client.callTool('list_pages', {});
+    pages = pagesResult.structuredContent?.pages || [];
+    existing = findMatchingPage(pages);
+    if (existing) {
+      await client.callTool('select_page', { pageId: existing.id, bringToFront: true });
+      if (!String(existing.url || '').startsWith(baseUrl)) {
+        await client.callTool('navigate_page', { type: 'url', url: baseUrl, timeout: timeoutMs });
+      }
+      return existing.id;
+    }
+  }
+
+  throw new Error(`Failed to open ${baseUrl}; pages: ${JSON.stringify(pages)}`);
 }
 
 async function clickByQuestion(client, questionText, roleHint) {
@@ -265,28 +305,43 @@ async function fillAnswer(client, questionText, value, filePath) {
   return { question: questionText, uid: node.id, role: node.role, value };
 }
 
-async function clickStart(client, timeoutMs) {
-  await waitForTexts(client, ['Начать задание'], timeoutMs);
+async function clickNamedButton(client, buttonText, timeoutMs, successTexts = []) {
+  await waitForTexts(client, [buttonText], timeoutMs);
   const { snapshot } = await takeSnapshot(client);
-  const node = flattenSnapshot(snapshot).find((n) => ['button', 'link'].includes(n.role) && normalizeText(n.name).includes('Начать задание'));
-  if (!node) throw new Error('Could not find “Начать задание” button');
-  await client.callTool('click', { uid: node.id });
+  const node = flattenSnapshot(snapshot).find((n) => ['button', 'link'].includes(n.role) && normalizeText(n.name).includes(buttonText));
+  if (!node) throw new Error(`Could not find “${buttonText}” button`);
+
+  await client.callTool('click', { uid: node.id, includeSnapshot: true });
+  if (!successTexts.length) return;
+
+  try {
+    await waitForAllTexts(client, successTexts, 3000);
+    return;
+  } catch {}
+
+  await client.callTool('evaluate_script', {
+    function: `(el) => {
+      el.click();
+      return {
+        ok: true,
+        tagName: el.tagName,
+        text: (el.innerText || el.textContent || '').trim()
+      };
+    }`,
+    args: [node.id],
+  });
+}
+
+async function clickStart(client, timeoutMs) {
+  await clickNamedButton(client, 'Начать задание', timeoutMs, Object.keys(DEFAULT_STEP_ANSWERS[1]));
 }
 
 async function clickContinue(client, timeoutMs) {
-  await waitForTexts(client, ['Продолжить'], timeoutMs);
-  const { snapshot } = await takeSnapshot(client);
-  const node = flattenSnapshot(snapshot).find((n) => n.role === 'button' && normalizeText(n.name).includes('Продолжить'));
-  if (!node) throw new Error('Could not find “Продолжить” button');
-  await client.callTool('click', { uid: node.id, includeSnapshot: true });
+  await clickNamedButton(client, 'Продолжить', timeoutMs, Object.keys(DEFAULT_STEP_ANSWERS[2]));
 }
 
 async function clickFinalize(client, timeoutMs) {
-  await waitForTexts(client, ['Зафиксировать идентификатор'], timeoutMs);
-  const { snapshot } = await takeSnapshot(client);
-  const node = flattenSnapshot(snapshot).find((n) => n.role === 'button' && normalizeText(n.name).includes('Зафиксировать идентификатор'));
-  if (!node) throw new Error('Could not find final submit button');
-  await client.callTool('click', { uid: node.id });
+  await clickNamedButton(client, 'Зафиксировать идентификатор', timeoutMs, ['UTC']);
 }
 
 async function getCurrentUrl(client) {
@@ -307,7 +362,8 @@ function parseResultText(text) {
   };
 }
 
-function buildMcpSpawn(input) {
+async function buildMcpSpawn(input) {
+  const userMcp = input.mcp || {};
   const mcp = {
     command: 'npx',
     args: ['-y', 'chrome-devtools-mcp@latest', '--experimentalStructuredContent'],
@@ -315,14 +371,24 @@ function buildMcpSpawn(input) {
     channel: 'stable',
     extraArgs: [],
     env: {},
-    ...(input.mcp || {}),
+    ...userMcp,
   };
   const args = [...mcp.args];
+  const browserUrl = mcp.browserUrl || DEFAULT_BROWSER_URL;
+  const shouldProbeDefaultBrowserUrl = !mcp.browserUrl && mcp.autoConnect !== false;
+  const canUseBrowserUrl = mcp.browserUrl
+    ? true
+    : shouldProbeDefaultBrowserUrl && await canConnectToBrowserUrl(browserUrl, input.connectTimeoutMs);
 
-  if (mcp.autoConnect !== false) args.push('--autoConnect');
-  if (mcp.browserUrl) args.push('--browserUrl', mcp.browserUrl);
+  if (canUseBrowserUrl) {
+    args.push('--browserUrl', browserUrl);
+  } else if (mcp.autoConnect !== false) {
+    args.push('--autoConnect');
+  }
+
   if (mcp.wsEndpoint) args.push('--wsEndpoint', mcp.wsEndpoint);
-  if (mcp.channel) args.push('--channel', mcp.channel);
+  const shouldPassChannel = !canUseBrowserUrl && !mcp.wsEndpoint && (userMcp.channel || (!userMcp.browserUrl && mcp.channel));
+  if (shouldPassChannel) args.push('--channel', mcp.channel);
   if (mcp.executablePath) args.push('--executablePath', mcp.executablePath);
   if (mcp.userDataDir) args.push('--userDataDir', mcp.userDataDir);
   if (mcp.logFile) args.push('--logFile', mcp.logFile);
@@ -335,7 +401,7 @@ function buildMcpSpawn(input) {
 async function run(rawInput) {
   const input = InputSchema.parse(rawInput);
   input.stepAnswers = normalizeStepAnswers(input.stepAnswers);
-  const spawnSpec = buildMcpSpawn(input);
+  const spawnSpec = await buildMcpSpawn(input);
   const client = await McpClient.create(spawnSpec.command, spawnSpec.args, {
     cwd: process.cwd(),
     env: spawnSpec.env,

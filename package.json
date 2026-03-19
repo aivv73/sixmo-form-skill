@@ -2,16 +2,16 @@
   "name": "sixmo-form-skill",
   "version": "1.0.0",
   "description": "Playwright-first automation for the Sixmo adaptive form",
-  "main": "index.js",
+  "main": "scripts/run-sixmo-form.js",
   "bin": {
-    "sixmo-form-submit": "index.js"
+    "sixmo-form-submit": "scripts/run-sixmo-form.js"
   },
   "scripts": {
-    "run-example": "node index.js examples/example-input.json"
+    "run-example": "node scripts/run-sixmo-form.js assets/examples/example-input.json"
   },
   "keywords": [
     "automation",
-    "playwright",
+    "chrome-devtools-mcp",
     "sixmo",
     "openclaw",
     "skill"
@@ -20,7 +20,9 @@
   "license": "MIT",
   "type": "commonjs",
   "dependencies": {
-    "playwright": "^1.58.2",
     "zod": "^4.3.6"
+  }
+}
+6"
   }
 }

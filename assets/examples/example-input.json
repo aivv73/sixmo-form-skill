@@ -10,8 +10,6 @@
       "tempo_choice": "Снитч"
     }
   },
-  "filePath": "examples/upload.txt",
-  "headless": true,
-  "tracePath": "artifacts/trace.zip",
-  "finalScreenshotPath": "artifacts/result.png"
+  "filePath": "assets/examples/upload.txt",
+  "timeoutMs": 60000
 }
